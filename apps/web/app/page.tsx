@@ -3,8 +3,9 @@
 import { useMemo, useState } from "react";
 import { Clapperboard, Download, Loader2 } from "lucide-react";
 import { ClipList } from "@/components/clip-list";
+import { VideoDropzone } from "@/components/video-dropzone";
 import { createProject, createRenderJob } from "@/lib/api";
-import type { ProjectPayload, RenderJob, Timeline } from "@/lib/types";
+import type { ProjectPayload, RenderJob, Timeline, UploadedVideo } from "@/lib/types";
 
 const initialTimeline: Timeline = {
   clips: [
@@ -64,6 +65,28 @@ export default function Home() {
     }
   }
 
+  function addUploadedVideos(videos: UploadedVideo[]) {
+    setTimeline((current) => {
+      const nextClips = videos.map((video, index) => ({
+        id: crypto.randomUUID(),
+        file: video.file,
+        order: current.clips.length + index + 1,
+        trimStart: 0,
+        trimEnd: 10,
+        zoom: [],
+        caption: "",
+      }));
+
+      return {
+        ...current,
+        clips:
+          current.clips.length === 1 && current.clips[0].file === "clip1.mp4"
+            ? nextClips
+            : [...current.clips, ...nextClips],
+      };
+    });
+  }
+
   return (
     <main className="workspace">
       <header className="topbar">
@@ -72,8 +95,8 @@ export default function Home() {
             <Clapperboard size={22} />
           </span>
           <div>
-            <h1>Video Editor MVP</h1>
-            <p>Manual timeline now, AI instruction layer later</p>
+            <h1>Documentation Flow Studio</h1>
+            <p>Video timeline and narration pipeline</p>
           </div>
         </div>
         <button
@@ -127,6 +150,8 @@ export default function Home() {
           />
         </label>
       </section>
+
+      <VideoDropzone onUploaded={addUploadedVideos} />
 
       <div className="grid">
         <ClipList

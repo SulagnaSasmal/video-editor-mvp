@@ -93,3 +93,10 @@ class RenderJob(BaseModel):
     outputFile: str | None = None
     commandPreview: list[str] = Field(default_factory=list)
     error: str | None = None
+
+
+class UploadedVideo(BaseModel):
+    file: str
+    originalName: str
+    contentType: str
+    size: int

@@ -38,3 +38,10 @@ export type RenderJob = {
   commandPreview: string[];
   error: string | null;
 };
+
+export type UploadedVideo = {
+  file: string;
+  originalName: string;
+  contentType: string;
+  size: number;
+};

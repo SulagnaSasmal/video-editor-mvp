@@ -1,0 +1,22 @@
+.env
+.env.local
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.egg-info/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+npm-debug.log*
+!apps/web/package-lock.json
+
+# Local render artifacts
+storage/uploads/*
+storage/exports/*
+!storage/uploads/.gitkeep
+!storage/exports/.gitkeep

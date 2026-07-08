@@ -1,7 +1,17 @@
 import type { EnhancedRecording, ProjectPayload, RenderJob, UploadedVideo } from "./types";
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8003";
+
+async function apiError(response: Response) {
+  const body = await response.text();
+  if (response.status === 404) {
+    return new Error(
+      `API route not found at ${response.url}. Restart the web app with NEXT_PUBLIC_API_BASE_URL=http://localhost:8003. Response: ${body}`,
+    );
+  }
+  return new Error(body);
+}
 
 export async function createProject(payload: ProjectPayload) {
   const response = await fetch(`${API_BASE_URL}/projects`, {
@@ -11,7 +21,7 @@ export async function createProject(payload: ProjectPayload) {
   });
 
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw await apiError(response);
   }
 
   return response.json() as Promise<ProjectPayload & { id: string }>;
@@ -23,7 +33,7 @@ export async function createRenderJob(projectId: string) {
   });
 
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw await apiError(response);
   }
 
   return response.json() as Promise<RenderJob>;
@@ -39,7 +49,7 @@ export async function uploadVideos(files: File[]) {
   });
 
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw await apiError(response);
   }
 
   return response.json() as Promise<UploadedVideo[]>;
@@ -56,7 +66,7 @@ export async function enhanceRecording(recording: {
   });
 
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw await apiError(response);
   }
 
   return response.json() as Promise<EnhancedRecording>;

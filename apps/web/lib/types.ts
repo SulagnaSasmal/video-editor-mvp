@@ -45,3 +45,12 @@ export type UploadedVideo = {
   contentType: string;
   size: number;
 };
+
+export type EnhancedRecording = {
+  file: string;
+  script: string;
+  ttsProvider: string;
+  voiceoverFile: string | null;
+  steps: string[];
+  warning: string | null;
+};

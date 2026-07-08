@@ -100,3 +100,26 @@ class UploadedVideo(BaseModel):
     originalName: str
     contentType: str
     size: int
+
+
+class EnhanceRequest(BaseModel):
+    file: str
+    originalName: str = ""
+    ttsProvider: str | None = None
+
+    @field_validator("file")
+    @classmethod
+    def file_must_be_relative(cls, value: str):
+        path = Path(value)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError("recording file must be a relative upload path")
+        return value
+
+
+class EnhancedRecording(BaseModel):
+    file: str
+    script: str
+    ttsProvider: str
+    voiceoverFile: str | None = None
+    steps: list[str] = Field(default_factory=list)
+    warning: str | None = None

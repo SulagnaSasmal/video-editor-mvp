@@ -1,4 +1,4 @@
-import type { ProjectPayload, RenderJob, UploadedVideo } from "./types";
+import type { EnhancedRecording, ProjectPayload, RenderJob, UploadedVideo } from "./types";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -43,4 +43,21 @@ export async function uploadVideos(files: File[]) {
   }
 
   return response.json() as Promise<UploadedVideo[]>;
+}
+
+export async function enhanceRecording(recording: {
+  file: string;
+  originalName: string;
+}) {
+  const response = await fetch(`${API_BASE_URL}/ai/enhance`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(recording),
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<EnhancedRecording>;
 }

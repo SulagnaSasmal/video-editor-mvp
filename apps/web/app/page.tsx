@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen,
   Bot,
@@ -24,13 +24,15 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Square,
   Video,
   Wand2,
 } from "lucide-react";
 import { ClipList } from "@/components/clip-list";
 import { VideoDropzone } from "@/components/video-dropzone";
-import { createProject, createRenderJob } from "@/lib/api";
+import { createProject, createRenderJob, enhanceRecording, uploadVideos } from "@/lib/api";
 import type {
+  EnhancedRecording,
   ProjectPayload,
   RenderJob,
   Timeline,
@@ -39,6 +41,7 @@ import type {
 
 type View = "home" | "ask-ai" | "library" | "skills" | "recording";
 type SkillTab = "video" | "doc";
+type RecordingState = "idle" | "starting" | "recording" | "processing" | "ready" | "error";
 
 const initialTimeline: Timeline = {
   clips: [
@@ -135,6 +138,14 @@ export default function Home() {
   const [isRendering, setIsRendering] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
   const [showRecordingModal, setShowRecordingModal] = useState(false);
+  const [showCreateVideoModal, setShowCreateVideoModal] = useState(false);
+  const [recordingState, setRecordingState] = useState<RecordingState>("idle");
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [recordingError, setRecordingError] = useState("");
+  const [enhancement, setEnhancement] = useState<EnhancedRecording | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingChunksRef = useRef<BlobPart[]>([]);
 
   const payload = useMemo<ProjectPayload>(
     () => ({
@@ -143,6 +154,166 @@ export default function Home() {
     }),
     [projectName, timeline],
   );
+
+  useEffect(() => {
+    if (recordingState !== "recording") {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setRecordingSeconds((seconds) => seconds + 1);
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [recordingState]);
+
+  useEffect(() => {
+    return () => {
+      stopStreamTracks();
+    };
+  }, []);
+
+  function stopStreamTracks() {
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    recordingStreamRef.current = null;
+  }
+
+  function getRecorderMimeType() {
+    const types = [
+      "video/webm;codecs=vp9,opus",
+      "video/webm;codecs=vp8,opus",
+      "video/webm",
+    ];
+    return types.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
+  }
+
+  function formatRecordingTime(seconds: number) {
+    const minutes = Math.floor(seconds / 60)
+      .toString()
+      .padStart(2, "0");
+    const remainingSeconds = (seconds % 60).toString().padStart(2, "0");
+    return `${minutes}:${remainingSeconds}`;
+  }
+
+  async function beginBrowserRecording() {
+    if (!navigator.mediaDevices?.getDisplayMedia || typeof MediaRecorder === "undefined") {
+      setRecordingState("error");
+      setRecordingError("This browser does not support screen recording. Use current Chrome or Edge on localhost.");
+      setActiveView("recording");
+      return;
+    }
+
+    setShowRecordingModal(false);
+    setShowCreateVideoModal(false);
+    setActiveView("recording");
+    setRecordingState("starting");
+    setRecordingError("");
+    setEnhancement(null);
+    setRecordingSeconds(0);
+
+    try {
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 30 },
+        audio: true,
+      });
+
+      let micStream: MediaStream | null = null;
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      } catch {
+        micStream = null;
+      }
+
+      const combinedStream = new MediaStream([
+        ...screenStream.getVideoTracks(),
+        ...screenStream.getAudioTracks(),
+        ...(micStream?.getAudioTracks() ?? []),
+      ]);
+      recordingStreamRef.current = combinedStream;
+      recordingChunksRef.current = [];
+
+      const mimeType = getRecorderMimeType();
+      const recorder = new MediaRecorder(
+        combinedStream,
+        mimeType ? { mimeType } : undefined,
+      );
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordingChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        void finishRecording(mimeType || "video/webm");
+      };
+
+      screenStream.getVideoTracks()[0]?.addEventListener("ended", () => {
+        stopBrowserRecording();
+      });
+
+      recorderRef.current = recorder;
+      recorder.start(1000);
+      setRecordingState("recording");
+    } catch (caught) {
+      stopStreamTracks();
+      setRecordingState("error");
+      setRecordingError(
+        caught instanceof Error
+          ? caught.message
+          : "Screen recording permission was not granted.",
+      );
+    }
+  }
+
+  function stopBrowserRecording() {
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+      return;
+    }
+    stopStreamTracks();
+  }
+
+  async function finishRecording(mimeType: string) {
+    setRecordingState("processing");
+    stopStreamTracks();
+
+    try {
+      const blob = new Blob(recordingChunksRef.current, { type: mimeType });
+      const recordingFile = new File(
+        [blob],
+        `screen-recording-${new Date().toISOString().replace(/[:.]/g, "-")}.webm`,
+        { type: "video/webm" },
+      );
+
+      const uploaded = await uploadVideos([recordingFile]);
+      addUploadedVideos(uploaded);
+
+      if (uploaded[0]) {
+        const enhanced = await enhanceRecording({
+          file: uploaded[0].file,
+          originalName: uploaded[0].originalName,
+        });
+        setEnhancement(enhanced);
+      }
+
+      setRecordingState("ready");
+      setShowEditor(true);
+    } catch (caught) {
+      setRecordingState("error");
+      setRecordingError(caught instanceof Error ? caught.message : "Recording upload failed.");
+    } finally {
+      recorderRef.current = null;
+      recordingChunksRef.current = [];
+    }
+  }
 
   async function previewRender() {
     setShowEditor(true);
@@ -186,8 +357,7 @@ export default function Home() {
 
   function handleFeatureAction(action: "video" | "document") {
     if (action === "video") {
-      setShowEditor(true);
-      setActiveView("home");
+      setShowCreateVideoModal(true);
       return;
     }
 
@@ -215,8 +385,7 @@ export default function Home() {
   }
 
   function confirmRecording() {
-    setShowRecordingModal(false);
-    setActiveView("recording");
+    void beginBrowserRecording();
   }
 
   function renderHome() {
@@ -397,10 +566,45 @@ export default function Home() {
           <span className="recording-dot" />
           <h1>Recording setup is ready</h1>
           <p>Capture your workflow, talk through the steps, and Flow Studio will use it to prepare the video and documentation timeline.</p>
+          <div className="recording-status">
+            {recordingState === "starting" ? <span>Opening browser capture picker...</span> : null}
+            {recordingState === "recording" ? (
+              <>
+                <strong>{formatRecordingTime(recordingSeconds)}</strong>
+                <span>Recording screen and available audio</span>
+              </>
+            ) : null}
+            {recordingState === "processing" ? <span>Uploading recording and preparing AI cleanup...</span> : null}
+            {recordingState === "ready" ? <span>Recording added to the timeline.</span> : null}
+            {recordingState === "error" ? <span className="status-error">{recordingError}</span> : null}
+          </div>
+          {enhancement ? (
+            <div className="enhancement-card">
+              <h2>AI cleanup prepared</h2>
+              <ul>
+                {enhancement.steps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ul>
+              <p>{enhancement.script}</p>
+              {enhancement.voiceoverFile ? (
+                <small>Voiceover generated with {enhancement.ttsProvider}: {enhancement.voiceoverFile}</small>
+              ) : null}
+              {enhancement.warning ? <small>{enhancement.warning}</small> : null}
+            </div>
+          ) : null}
           <div className="recording-actions">
-            <button className="primary-button" type="button" onClick={() => setShowEditor(true)}>
-              Open timeline
-            </button>
+            {recordingState === "recording" ? (
+              <button className="primary-button danger-button" type="button" onClick={stopBrowserRecording}>
+                <Square size={16} />
+                Stop recording
+              </button>
+            ) : null}
+            {recordingState !== "recording" ? (
+              <button className="primary-button" type="button" onClick={() => setShowEditor(true)}>
+                Open timeline
+              </button>
+            ) : null}
             <button className="secondary-button" type="button" onClick={() => setActiveView("home")}>
               Back home
             </button>
@@ -576,6 +780,44 @@ export default function Home() {
             <button className="create-button" type="button" onClick={confirmRecording}>
               Got it, let's start!
             </button>
+          </section>
+        </div>
+      ) : null}
+
+      {showCreateVideoModal ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="create-video-modal" role="dialog" aria-modal="true" aria-labelledby="create-video-title">
+            <div className="modal-heading">
+              <h2 id="create-video-title">Create a Video</h2>
+              <p>Create professional product videos with AI assistance</p>
+            </div>
+            <div className="create-video-options">
+              <button
+                className="create-video-option"
+                type="button"
+                onClick={() => {
+                  setShowCreateVideoModal(false);
+                  startRecording();
+                }}
+              >
+                <span className="option-illustration">
+                  <Video size={44} />
+                </span>
+                <strong>Record your screen</strong>
+                <small>Capture any process and get a professional video instantly.</small>
+              </button>
+              <div className="create-video-option upload-option">
+                <span className="option-illustration">
+                  <Boxes size={44} />
+                </span>
+                <strong>Upload an existing recording</strong>
+                <small>Drop an existing meeting or screen recording and get a cleaned up video.</small>
+                <VideoDropzone onUploaded={(videos) => {
+                  addUploadedVideos(videos);
+                  setShowCreateVideoModal(false);
+                }} />
+              </div>
+            </div>
           </section>
         </div>
       ) : null}

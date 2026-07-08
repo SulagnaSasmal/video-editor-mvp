@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Film, UploadCloud } from "lucide-react";
+import { Upload, UploadCloud } from "lucide-react";
 import { uploadVideos } from "@/lib/api";
 import type { UploadedVideo } from "@/lib/types";
 
@@ -42,8 +42,8 @@ export function VideoDropzone({ onUploaded }: VideoDropzoneProps) {
   }
 
   return (
-    <section
-      className={`dropzone ${isDragging ? "is-dragging" : ""}`}
+    <div
+      className={`upload-tile ${isDragging ? "is-dragging" : ""}`}
       onDragOver={(event) => {
         event.preventDefault();
         setIsDragging(true);
@@ -69,21 +69,16 @@ export function VideoDropzone({ onUploaded }: VideoDropzoneProps) {
       />
 
       <button
-        className="dropzone-button"
+        className="upload-button"
         type="button"
         disabled={isUploading}
         onClick={() => inputRef.current?.click()}
       >
-        <span className="dropzone-icon">
-          {isUploading ? <UploadCloud size={24} /> : <Film size={24} />}
-        </span>
-        <span>
-          <strong>{isUploading ? "Uploading..." : "Drop videos or browse"}</strong>
-          <small>MP4, MOV, M4V, WebM</small>
-        </span>
+        {isUploading ? <UploadCloud size={22} /> : <Upload size={22} />}
+        <span>{isUploading ? "Uploading..." : "Upload a Video"}</span>
       </button>
 
-      {error ? <p className="dropzone-error">{error}</p> : null}
-    </section>
+      {error ? <p className="upload-error">{error}</p> : null}
+    </div>
   );
 }

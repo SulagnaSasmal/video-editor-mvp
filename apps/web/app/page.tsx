@@ -47,6 +47,8 @@ import {
   createProject,
   createRenderJob,
   enhanceRecording,
+  exportedMediaUrl,
+  exportProject,
   uploadVideos,
   uploadedMediaUrl,
 } from "@/lib/api";
@@ -228,6 +230,10 @@ const avatarOptions = [
   "linear-gradient(135deg, #ffe0da, #ffffff)",
 ] as const;
 
+function buildDefaultNarration(name: string) {
+  return `This walkthrough demonstrates ${name}. First, follow the action on screen. Next, notice each key decision point and the result it produces. Finally, review the completed flow so the process can be repeated confidently.`;
+}
+
 export default function Home() {
   const [activeView, setActiveView] = useState<View>("home");
   const [skillTab, setSkillTab] = useState<SkillTab>("video");
@@ -267,12 +273,28 @@ export default function Home() {
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<BlobPart[]>([]);
 
+  const narrationScript =
+    enhancement?.script ||
+    timeline.clips.map((clip) => clip.caption.trim()).filter(Boolean).join(" ") ||
+    buildDefaultNarration(projectName);
+
   const payload = useMemo<ProjectPayload>(
     () => ({
       name: projectName,
-      timeline,
+      timeline: {
+        ...timeline,
+        narration: {
+          enabled: true,
+          provider: null,
+          script: narrationScript,
+          voice: selectedVoice,
+          useOriginalAudio: useOriginalVoice,
+          backgroundMusic: musicEnabled,
+          musicVolume,
+        },
+      },
     }),
-    [projectName, timeline],
+    [musicEnabled, musicVolume, narrationScript, projectName, selectedVoice, timeline, useOriginalVoice],
   );
 
   const realClips = useMemo(
@@ -514,6 +536,25 @@ export default function Home() {
     }
   }
 
+  async function exportFinalVideo() {
+    setIsRendering(true);
+    setError("");
+    setJob(null);
+
+    try {
+      const project = await createProject(payload);
+      const nextJob = await exportProject(project.id);
+      setJob(nextJob);
+      if (nextJob.status === "failed") {
+        setError(nextJob.error ?? "Export failed");
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Export failed");
+    } finally {
+      setIsRendering(false);
+    }
+  }
+
   function addUploadedVideos(videos: UploadedVideo[]) {
     setTimeline((current) => {
       const nextClips = videos.map((video, index) => ({
@@ -654,7 +695,7 @@ export default function Home() {
       return;
     }
 
-    void previewRender();
+    void exportFinalVideo();
   }
 
   function startRecording() {
@@ -923,9 +964,9 @@ export default function Home() {
             <button className="ghost-icon" type="button" aria-label="More actions" title="More actions" onClick={() => setEditorTab("elements")}>
               <MoreHorizontal size={18} />
             </button>
-            <button className="secondary-button export-button" type="button" disabled={isRendering} onClick={previewRender}>
+            <button className="secondary-button export-button" type="button" disabled={isRendering} onClick={exportFinalVideo}>
               {isRendering ? <Loader2 className="spin" size={17} /> : <Download size={17} />}
-              Export
+              {isRendering ? "Rendering" : "Export"}
             </button>
             <button className="primary-button share-button" type="button" onClick={shareProject}>
               <Share2 size={17} />
@@ -1335,10 +1376,16 @@ export default function Home() {
 
             {job ? (
               <section className="export-ready">
-                <strong>Export preview ready</strong>
+                <strong>{job.status === "completed" ? "Professional MP4 ready" : "Export prepared"}</strong>
                 <span>
-                  {job.commandPreview.length} FFmpeg steps prepared · {selectedVoice.split(" - ")[0]} · {musicEnabled ? selectedMusic : "No music"}
+                  {job.commandPreview.length} FFmpeg steps · {selectedVoice.split(" - ")[0]} · {musicEnabled ? selectedMusic : "No music"}
                 </span>
+                {job.status === "completed" && job.downloadUrl ? (
+                  <a className="download-link" href={exportedMediaUrl(job.downloadUrl)} download>
+                    <Download size={16} />
+                    Download MP4
+                  </a>
+                ) : null}
               </section>
             ) : null}
           </section>

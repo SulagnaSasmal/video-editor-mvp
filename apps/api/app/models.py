@@ -65,9 +65,20 @@ class OutputSettings(BaseModel):
     format: OutputFormat = OutputFormat.mp4
 
 
+class NarrationSettings(BaseModel):
+    enabled: bool = True
+    provider: str | None = None
+    script: str = ""
+    voice: str = "Camila"
+    useOriginalAudio: bool = False
+    backgroundMusic: bool = False
+    musicVolume: Annotated[int, Field(ge=0, le=10)] = 3
+
+
 class Timeline(BaseModel):
     clips: list[Clip]
     output: OutputSettings = Field(default_factory=OutputSettings)
+    narration: NarrationSettings = Field(default_factory=NarrationSettings)
 
     @field_validator("clips")
     @classmethod
@@ -91,6 +102,8 @@ class RenderJob(BaseModel):
     projectId: UUID
     status: JobStatus = JobStatus.queued
     outputFile: str | None = None
+    downloadUrl: str | None = None
+    voiceoverFile: str | None = None
     commandPreview: list[str] = Field(default_factory=list)
     error: str | None = None
 

@@ -23,6 +23,15 @@ export type Timeline = {
     fps: number;
     format: "mp4";
   };
+  narration?: {
+    enabled: boolean;
+    provider?: string | null;
+    script: string;
+    voice: string;
+    useOriginalAudio: boolean;
+    backgroundMusic: boolean;
+    musicVolume: number;
+  };
 };
 
 export type ProjectPayload = {
@@ -35,6 +44,8 @@ export type RenderJob = {
   projectId: string;
   status: "queued" | "running" | "completed" | "failed";
   outputFile: string | null;
+  downloadUrl: string | null;
+  voiceoverFile: string | null;
   commandPreview: string[];
   error: string | null;
 };

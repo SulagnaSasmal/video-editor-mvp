@@ -1,5 +1,6 @@
 from pathlib import Path
 from shlex import quote
+import subprocess
 from uuid import UUID
 
 from .models import Clip, Timeline
@@ -16,8 +17,11 @@ def _caption_filter(caption: str) -> str | None:
     if not caption.strip():
         return None
     escaped = caption.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    font_file = Path("C:/Windows/Fonts/arial.ttf")
+    font_option = "fontfile='C\\:/Windows/Fonts/arial.ttf':" if font_file.exists() else ""
     return (
         "drawtext="
+        f"{font_option}"
         "fontcolor=white:"
         "fontsize=42:"
         "box=1:"
@@ -45,8 +49,9 @@ def _zoom_filter(clip: Clip) -> str | None:
 
 
 def _video_filter(clip: Clip, resolution: str, fps: int) -> str:
-    filters = [f"scale={resolution}:force_original_aspect_ratio=decrease"]
-    filters.append(f"pad={resolution}:(ow-iw)/2:(oh-ih)/2")
+    filter_resolution = resolution.replace("x", ":")
+    filters = [f"scale={filter_resolution}:force_original_aspect_ratio=decrease"]
+    filters.append(f"pad={filter_resolution}:(ow-iw)/2:(oh-ih)/2")
     filters.append(f"fps={fps}")
     zoom_filter = _zoom_filter(clip)
     caption_filter = _caption_filter(clip.caption)
@@ -62,6 +67,7 @@ def build_render_commands(
     timeline: Timeline,
     upload_dir: Path,
     export_dir: Path,
+    voiceover_path: Path | None = None,
 ) -> list[list[str]]:
     export_dir.mkdir(parents=True, exist_ok=True)
     output = timeline.output
@@ -95,24 +101,145 @@ def build_render_commands(
             "48000",
             "-ac",
             "2",
+            "-movflags",
+            "+faststart",
             str(normalized),
         ]
         commands.append(command)
 
-    final_file = export_dir / f"{project_id}.{output.format}"
-    concat_entries = "|".join(str(path) for path in normalized_files)
+    concat_file = export_dir / f"{project_id}-concat.txt"
+    concat_file.write_text(
+        "\n".join(f"file '{path.as_posix()}'" for path in normalized_files),
+        encoding="utf-8",
+    )
+    stitched_file = export_dir / f"{project_id}-stitched.mp4"
     commands.append(
         [
             "ffmpeg",
             "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
             "-i",
-            f"concat:{concat_entries}",
+            str(concat_file),
             "-c",
             "copy",
-            str(final_file),
+            "-movflags",
+            "+faststart",
+            str(stitched_file),
         ]
     )
+
+    final_file = export_dir / f"{project_id}.{output.format}"
+    if voiceover_path:
+        if timeline.narration.useOriginalAudio:
+            audio_filter = (
+                "[0:a]volume=0.16,loudnorm=I=-24:TP=-2:LRA=11[orig];"
+                "[1:a]loudnorm=I=-16:TP=-1.5:LRA=10,afade=t=in:st=0:d=0.25[voice];"
+                "[orig][voice]amix=inputs=2:duration=longest:dropout_transition=2,"
+                "loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.95[aout]"
+            )
+        else:
+            audio_filter = (
+                "[1:a]loudnorm=I=-16:TP=-1.5:LRA=10,"
+                "afade=t=in:st=0:d=0.25,"
+                "alimiter=limit=0.95[aout]"
+            )
+
+        commands.append(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(stitched_file),
+                "-i",
+                str(voiceover_path),
+                "-filter_complex",
+                audio_filter,
+                "-map",
+                "0:v:0",
+                "-map",
+                "[aout]",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-shortest",
+                "-movflags",
+                "+faststart",
+                str(final_file),
+            ]
+        )
+    else:
+        commands.append(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(stitched_file),
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "160k",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-movflags",
+                "+faststart",
+                str(final_file),
+            ]
+        )
+
     return commands
+
+
+def run_render_commands(commands: list[list[str]]) -> None:
+    for command in commands:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip() or result.stdout.strip()
+            raise RuntimeError(stderr[-1200:] if stderr else "FFmpeg render failed")
+
+
+def build_fallback_voiceover_command(
+    voiceover_path: Path,
+    duration: float,
+) -> list[str]:
+    return [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-t",
+        f"{max(duration, 1):.3f}",
+        "-c:a",
+        "mp3",
+        str(voiceover_path),
+    ]
+
+
+def timeline_duration(timeline: Timeline) -> float:
+    return sum(
+        max((clip.trimEnd or clip.trimStart + 8) - clip.trimStart, 0)
+        for clip in timeline.clips
+    )
 
 
 def command_preview(commands: list[list[str]]) -> list[str]:

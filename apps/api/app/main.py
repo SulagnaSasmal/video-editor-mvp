@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .models import EnhancedRecording, EnhanceRequest, Project, ProjectCreate, RenderJob, UploadedVideo
-from .render import build_render_commands, command_preview
+from .render import build_render_commands, command_preview, run_render_commands
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 UPLOAD_DIR = ROOT_DIR / "storage" / "uploads"
@@ -22,6 +22,7 @@ EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Video Editor MVP API", version="0.1.0")
 app.mount("/media/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+app.mount("/media/exports", StaticFiles(directory=EXPORT_DIR), name="exports")
 
 app.add_middleware(
     CORSMiddleware,
@@ -64,7 +65,16 @@ def choose_tts_provider(requested: str | None) -> str:
     return "none"
 
 
-def synthesize_azure(script: str, output_path: Path) -> None:
+def azure_voice_name(voice: str | None) -> str:
+    label = (voice or "").lower()
+    if "davis" in label or "male" in label:
+        return "en-US-DavisNeural"
+    if "aria" in label:
+        return "en-US-AriaNeural"
+    return "en-US-JennyNeural"
+
+
+def synthesize_azure(script: str, output_path: Path, voice: str | None = None) -> None:
     key = os.environ.get("AZURE_TTS_KEY")
     region = os.environ.get("AZURE_TTS_REGION")
     if not key or not region:
@@ -73,7 +83,7 @@ def synthesize_azure(script: str, output_path: Path) -> None:
     endpoint = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
     ssml = (
         "<speak version='1.0' xml:lang='en-US'>"
-        "<voice xml:lang='en-US' xml:gender='Female' name='en-US-JennyNeural'>"
+        f"<voice xml:lang='en-US' name='{azure_voice_name(voice)}'>"
         f"{html.escape(script)}"
         "</voice></speak>"
     )
@@ -92,7 +102,7 @@ def synthesize_azure(script: str, output_path: Path) -> None:
     output_path.write_bytes(response.content)
 
 
-def synthesize_elevenlabs(script: str, output_path: Path) -> None:
+def synthesize_elevenlabs(script: str, output_path: Path, voice: str | None = None) -> None:
     key = os.environ.get("ELEVENLABS_API_KEY")
     if not key:
         raise RuntimeError("ElevenLabs credentials are not configured")
@@ -115,6 +125,45 @@ def synthesize_elevenlabs(script: str, output_path: Path) -> None:
     )
     response.raise_for_status()
     output_path.write_bytes(response.content)
+
+
+def project_script(project: Project) -> str:
+    explicit_script = project.timeline.narration.script.strip()
+    if explicit_script:
+        return explicit_script
+
+    caption_script = " ".join(
+        clip.caption.strip()
+        for clip in project.timeline.clips
+        if clip.caption.strip()
+    )
+    if caption_script:
+        return caption_script
+
+    return build_ai_script(project.name)
+
+
+def synthesize_project_voiceover(project: Project) -> tuple[Path | None, str, str | None]:
+    narration = project.timeline.narration
+    if not narration.enabled:
+        return None, "none", None
+
+    script = project_script(project)
+    provider = choose_tts_provider(narration.provider)
+    if provider == "none":
+        return None, provider, "No TTS provider credentials are configured"
+
+    output_name = f"{project.id}-voiceover.mp3"
+    output_path = EXPORT_DIR / output_name
+    try:
+        if provider == "azure":
+            synthesize_azure(script, output_path, narration.voice)
+        else:
+            synthesize_elevenlabs(script, output_path, narration.voice)
+    except Exception as exc:
+        return None, provider, f"TTS generation failed: {exc}"
+
+    return output_path, provider, None
 
 
 @app.get("/health")
@@ -229,6 +278,47 @@ def create_render_job(project_id: UUID):
         commandPreview=command_preview(commands),
     )
     jobs[job.id] = job
+    return job
+
+
+@app.post("/projects/{project_id}/export", response_model=RenderJob)
+def export_project(project_id: UUID):
+    project = projects.get(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    voiceover_path, provider, warning = synthesize_project_voiceover(project)
+    commands = build_render_commands(
+        project.id,
+        project.timeline,
+        UPLOAD_DIR,
+        EXPORT_DIR,
+        voiceover_path=voiceover_path,
+    )
+    output_file = EXPORT_DIR / f"{project.id}.{project.timeline.output.format}"
+    job = RenderJob(
+        projectId=project.id,
+        status="running",
+        outputFile=str(output_file),
+        downloadUrl=f"/media/exports/{output_file.name}",
+        voiceoverFile=voiceover_path.name if voiceover_path else None,
+        commandPreview=command_preview(commands),
+        error=warning,
+    )
+    jobs[job.id] = job
+
+    if warning:
+        job.status = "failed"
+        return job
+
+    try:
+        run_render_commands(commands)
+    except Exception as exc:
+        job.status = "failed"
+        job.error = str(exc)
+        return job
+
+    job.status = "completed"
     return job
 
 

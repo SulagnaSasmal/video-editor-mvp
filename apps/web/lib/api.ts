@@ -39,6 +39,18 @@ export async function createRenderJob(projectId: string) {
   return response.json() as Promise<RenderJob>;
 }
 
+export async function exportProject(projectId: string) {
+  const response = await fetch(`${API_BASE_URL}/projects/${projectId}/export`, {
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw await apiError(response);
+  }
+
+  return response.json() as Promise<RenderJob>;
+}
+
 export async function uploadVideos(files: File[]) {
   const formData = new FormData();
   files.forEach((file) => formData.append("files", file));
@@ -74,4 +86,8 @@ export async function enhanceRecording(recording: {
 
 export function uploadedMediaUrl(file: string) {
   return `${API_BASE_URL}/media/uploads/${encodeURIComponent(file)}`;
+}
+
+export function exportedMediaUrl(path: string) {
+  return path.startsWith("http") ? path : `${API_BASE_URL}${path}`;
 }

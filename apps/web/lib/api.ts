@@ -1,6 +1,6 @@
 import type { EnhancedRecording, ProjectPayload, RenderJob, UploadedVideo } from "./types";
 
-const API_BASE_URL =
+export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8003";
 
 async function apiError(response: Response) {
@@ -70,4 +70,8 @@ export async function enhanceRecording(recording: {
   }
 
   return response.json() as Promise<EnhancedRecording>;
+}
+
+export function uploadedMediaUrl(file: string) {
+  return `${API_BASE_URL}/media/uploads/${encodeURIComponent(file)}`;
 }

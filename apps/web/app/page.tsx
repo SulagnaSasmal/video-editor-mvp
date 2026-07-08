@@ -6,6 +6,7 @@ import {
   Bot,
   Boxes,
   CalendarDays,
+  ChevronLeft,
   Clapperboard,
   Captions,
   Download,
@@ -15,25 +16,37 @@ import {
   Home as HomeIcon,
   Info,
   LayoutTemplate,
+  Languages,
+  List,
   Loader2,
   Mic,
   MoreHorizontal,
+  Music,
   Plus,
   Radio,
+  RefreshCcw,
   Scissors,
   Search,
   Send,
   Settings,
+  Share2,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Square,
+  UserRound,
   Video,
   Volume2,
   Wand2,
 } from "lucide-react";
-import { ClipList } from "@/components/clip-list";
 import { VideoDropzone } from "@/components/video-dropzone";
-import { createProject, createRenderJob, enhanceRecording, uploadVideos } from "@/lib/api";
+import {
+  createProject,
+  createRenderJob,
+  enhanceRecording,
+  uploadVideos,
+  uploadedMediaUrl,
+} from "@/lib/api";
 import type {
   EnhancedRecording,
   ProjectPayload,
@@ -42,10 +55,10 @@ import type {
   UploadedVideo,
 } from "@/lib/types";
 
-type View = "home" | "ask-ai" | "library" | "skills" | "recording";
+type View = "home" | "ask-ai" | "library" | "skills" | "recording" | "editor";
 type SkillTab = "video" | "doc";
 type RecordingState = "idle" | "starting" | "recording" | "processing" | "ready" | "error";
-type EditMode = "trim" | "captions" | "cleanup" | "voiceover" | "export";
+type EditorTab = "script" | "voice" | "music" | "visuals" | "zooms" | "avatar" | "elements";
 
 const initialTimeline: Timeline = {
   clips: [
@@ -132,36 +145,41 @@ const quickGuide = [
   },
 ] as const;
 
-const editModes = [
+const editorTabs = [
   {
-    key: "trim",
-    title: "Trim",
-    body: "Cut dead air and reorder clips.",
-    icon: Scissors,
+    key: "script",
+    label: "Script",
+    icon: FileText,
   },
   {
-    key: "captions",
-    title: "Captions",
-    body: "Edit captions and on-screen text.",
-    icon: Captions,
-  },
-  {
-    key: "cleanup",
-    title: "AI Cleanup",
-    body: "Prepare script, cleanup plan, and polish.",
-    icon: Wand2,
-  },
-  {
-    key: "voiceover",
-    title: "Voiceover",
-    body: "Use Azure or ElevenLabs narration.",
+    key: "voice",
+    label: "AI Voice",
     icon: Volume2,
   },
   {
-    key: "export",
-    title: "Export",
-    body: "Generate the final MP4 package.",
-    icon: Download,
+    key: "music",
+    label: "Music",
+    icon: Music,
+  },
+  {
+    key: "visuals",
+    label: "Visuals",
+    icon: Captions,
+  },
+  {
+    key: "zooms",
+    label: "Zooms",
+    icon: Scissors,
+  },
+  {
+    key: "avatar",
+    label: "AI Avatar",
+    icon: UserRound,
+  },
+  {
+    key: "elements",
+    label: "Elements",
+    icon: Boxes,
   },
 ] as const;
 
@@ -173,10 +191,9 @@ export default function Home() {
   const [job, setJob] = useState<RenderJob | null>(null);
   const [error, setError] = useState("");
   const [isRendering, setIsRendering] = useState(false);
-  const [showEditor, setShowEditor] = useState(false);
   const [showRecordingModal, setShowRecordingModal] = useState(false);
   const [showCreateVideoModal, setShowCreateVideoModal] = useState(false);
-  const [editMode, setEditMode] = useState<EditMode>("trim");
+  const [editorTab, setEditorTab] = useState<EditorTab>("script");
   const [recordingState, setRecordingState] = useState<RecordingState>("idle");
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordingError, setRecordingError] = useState("");
@@ -192,6 +209,44 @@ export default function Home() {
     }),
     [projectName, timeline],
   );
+
+  const realClips = useMemo(
+    () => timeline.clips.filter((clip) => clip.file && clip.file !== "clip1.mp4"),
+    [timeline.clips],
+  );
+
+  const previewFile = realClips[0]?.file ?? "";
+  const previewUrl = previewFile ? uploadedMediaUrl(previewFile) : "";
+  const totalDuration = useMemo(
+    () =>
+      timeline.clips.reduce(
+        (total, clip) => total + Math.max(clip.trimEnd - clip.trimStart, 0),
+        0,
+      ),
+    [timeline.clips],
+  );
+
+  const generatedScriptLines = useMemo(
+    () => enhancement?.script.match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.map((line) => line.trim()) ?? [],
+    [enhancement],
+  );
+
+  const editorScenes = useMemo(() => {
+    let cursor = 0;
+    return timeline.clips.map((clip, index) => {
+      const startsAt = cursor;
+      cursor += Math.max(clip.trimEnd - clip.trimStart, 0);
+
+      return {
+        clip,
+        startsAt,
+        text:
+          clip.caption.trim() ||
+          generatedScriptLines[index] ||
+          (index === 0 ? "Enter your script text..." : "Describe what happens in this scene."),
+      };
+    });
+  }, [generatedScriptLines, timeline.clips]);
 
   useEffect(() => {
     if (recordingState !== "recording") {
@@ -230,6 +285,15 @@ export default function Home() {
       .toString()
       .padStart(2, "0");
     const remainingSeconds = (seconds % 60).toString().padStart(2, "0");
+    return `${minutes}:${remainingSeconds}`;
+  }
+
+  function formatTimelineTime(seconds: number) {
+    const safeSeconds = Math.max(Math.floor(seconds), 0);
+    const minutes = Math.floor(safeSeconds / 60)
+      .toString()
+      .padStart(2, "0");
+    const remainingSeconds = (safeSeconds % 60).toString().padStart(2, "0");
     return `${minutes}:${remainingSeconds}`;
   }
 
@@ -343,7 +407,6 @@ export default function Home() {
       }
 
       setRecordingState("ready");
-      setShowEditor(true);
     } catch (caught) {
       setRecordingState("error");
       setRecordingError(caught instanceof Error ? caught.message : "Recording upload failed.");
@@ -354,7 +417,6 @@ export default function Home() {
   }
 
   async function previewRender() {
-    setShowEditor(true);
     setIsRendering(true);
     setError("");
     setJob(null);
@@ -390,8 +452,8 @@ export default function Home() {
             : [...current.clips, ...nextClips],
       };
     });
-    setShowEditor(true);
-    setEditMode("trim");
+    setEditorTab("script");
+    setActiveView("editor");
   }
 
   function applyScriptToCaptions() {
@@ -406,7 +468,7 @@ export default function Home() {
         caption: index === 0 ? enhancement.script : clip.caption,
       })),
     }));
-    setEditMode("captions");
+    setEditorTab("script");
   }
 
   function handleFeatureAction(action: "video" | "document") {
@@ -421,8 +483,7 @@ export default function Home() {
 
   function handleGuideAction(action: (typeof quickGuide)[number]["action"]) {
     if (action === "upload" || action === "timeline") {
-      setShowEditor(true);
-      setActiveView("home");
+      setActiveView("editor");
       return;
     }
 
@@ -502,7 +563,6 @@ export default function Home() {
           </div>
         </section>
 
-        {showEditor ? renderEditor() : null}
       </>
     );
   }
@@ -553,7 +613,7 @@ export default function Home() {
           <input placeholder="Search content" />
         </div>
         <h1>Your Content</h1>
-        <button className="content-card" type="button" onClick={() => setShowEditor(true)}>
+        <button className="content-card" type="button" onClick={() => setActiveView("editor")}>
           <div className="content-thumb">
             <span>FINX-GLASS</span>
           </div>
@@ -567,7 +627,6 @@ export default function Home() {
           <h2>Accessing the FINX-GLASS Operationa...</h2>
           <span className="language-pill">English</span>
         </button>
-        {showEditor ? renderEditor() : null}
       </section>
     );
   }
@@ -655,7 +714,7 @@ export default function Home() {
               </button>
             ) : null}
             {recordingState !== "recording" ? (
-          <button className="primary-button" type="button" onClick={() => setShowEditor(true)}>
+          <button className="primary-button" type="button" onClick={() => setActiveView("editor")}>
                 Open timeline
               </button>
             ) : null}
@@ -670,166 +729,210 @@ export default function Home() {
 
   function renderEditor() {
     return (
-      <section className="editor-workspace">
-        <div className="editor-header">
-          <div>
-            <h2>Timeline workspace</h2>
-            <p>Uploaded clips appear here for trimming, captions, and export preview.</p>
-          </div>
-          <button
-            className="primary-button"
-            type="button"
-            disabled={isRendering}
-            onClick={previewRender}
-          >
-            {isRendering ? (
-              <Loader2 className="spin" size={18} />
-            ) : (
-              <Download size={18} />
-            )}
-            Export preview
+      <section className="editor-page">
+        <header className="editor-topbar">
+          <button className="editor-back" type="button" aria-label="Back home" onClick={() => setActiveView("home")}>
+            <ChevronLeft size={19} />
           </button>
-        </div>
-
-        <section className="settings-bar">
-          <label>
-            <span>Project</span>
-            <input
-              value={projectName}
-              onChange={(event) => setProjectName(event.target.value)}
-            />
-          </label>
-          <label>
-            <span>Resolution</span>
-            <select
-              value={timeline.output.resolution}
-              onChange={(event) =>
-                setTimeline({
-                  ...timeline,
-                  output: {
-                    ...timeline.output,
-                    resolution: event.target.value,
-                  },
-                })
-              }
-            >
-              <option value="1920x1080">1920x1080</option>
-              <option value="1080x1920">1080x1920</option>
-              <option value="1280x720">1280x720</option>
-            </select>
-          </label>
-          <label>
-            <span>FPS</span>
-            <input
-              min="24"
-              max="60"
-              type="number"
-              value={timeline.output.fps}
-              onChange={(event) =>
-                setTimeline({
-                  ...timeline,
-                  output: {
-                    ...timeline.output,
-                    fps: Number(event.target.value),
-                  },
-                })
-              }
-            />
-          </label>
-        </section>
-
-        <section className="edit-options" aria-label="Editing options">
-          {editModes.map((mode) => (
-            <button
-              className={`edit-option ${editMode === mode.key ? "is-active" : ""}`}
-              key={mode.key}
-              type="button"
-              onClick={() => setEditMode(mode.key)}
-            >
-              <span>
-                <mode.icon size={18} />
-              </span>
-              <strong>{mode.title}</strong>
-              <small>{mode.body}</small>
+          <input
+            aria-label="Project title"
+            className="editor-title-input"
+            value={projectName}
+            onChange={(event) => setProjectName(event.target.value)}
+          />
+          <div className="editor-top-actions">
+            <span className="view-toggle" aria-label="Editor view mode">
+              <List size={16} />
+              <Scissors size={15} />
+            </span>
+            <button className="ghost-icon" type="button" aria-label="Help" title="Help">
+              <HelpCircle size={18} />
             </button>
-          ))}
-        </section>
+            <button className="ghost-icon" type="button" aria-label="Settings" title="Settings">
+              <SlidersHorizontal size={18} />
+            </button>
+            <button className="ghost-icon" type="button" aria-label="Language" title="Language">
+              <Languages size={18} />
+            </button>
+            <button className="ghost-icon" type="button" aria-label="More actions" title="More actions">
+              <MoreHorizontal size={18} />
+            </button>
+            <button className="secondary-button export-button" type="button" disabled={isRendering} onClick={previewRender}>
+              {isRendering ? <Loader2 className="spin" size={17} /> : <Download size={17} />}
+              Export
+            </button>
+            <button className="primary-button share-button" type="button">
+              <Share2 size={17} />
+              Share
+            </button>
+          </div>
+        </header>
 
-        <section className="edit-detail panel">
-          {editMode === "trim" ? (
-            <div>
-              <h2>Trim and arrange</h2>
-              <p>Use the timeline rows below to set clip start/end times, reorder clips, and remove unwanted sections.</p>
-            </div>
-          ) : null}
-          {editMode === "captions" ? (
-            <div>
-              <h2>Captions</h2>
-              <p>Edit caption text directly in the timeline. Captions will be burned into the exported video in the next render step.</p>
-            </div>
-          ) : null}
-          {editMode === "cleanup" ? (
-            <div>
-              <h2>AI cleanup</h2>
-              <p>Flow Studio prepares a cleaned-up script and render plan from your recording.</p>
-              {enhancement ? (
-                <div className="script-box">
-                  <strong>Generated script</strong>
-                  <p>{enhancement.script}</p>
-                  <button className="secondary-button" type="button" onClick={applyScriptToCaptions}>
-                    Apply to captions
-                  </button>
+        <div className="editor-shell">
+          <aside className="editor-side-panel">
+            <nav className="editor-tabs" aria-label="Editing tools">
+              {editorTabs.map((tab) => (
+                <button
+                  className={`editor-tab ${editorTab === tab.key ? "is-active" : ""}`}
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setEditorTab(tab.key)}
+                >
+                  <tab.icon size={16} />
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
+
+            <div className="editor-tab-panel">
+              {editorTab === "script" ? (
+                <>
+                  <div className="script-toolbar">
+                    <button className="secondary-button compact-button" type="button" onClick={applyScriptToCaptions}>
+                      <Plus size={16} />
+                      Add
+                    </button>
+                    <button className="icon-button" type="button" aria-label="AI cleanup" title="AI cleanup">
+                      <Sparkles size={16} />
+                    </button>
+                    <button className="icon-button" type="button" aria-label="Magic edit" title="Magic edit">
+                      <Wand2 size={16} />
+                    </button>
+                    <button className="icon-button" type="button" aria-label="Search script" title="Search script">
+                      <Search size={16} />
+                    </button>
+                  </div>
+                  <div className="scene-list">
+                    {editorScenes.map((scene) => (
+                      <article className="scene-row" key={scene.clip.id}>
+                        <span className="scene-time">{formatTimelineTime(scene.startsAt)}</span>
+                        <textarea
+                          aria-label={`Script for ${scene.clip.file}`}
+                          value={scene.text}
+                          onChange={(event) =>
+                            setTimeline({
+                              ...timeline,
+                              clips: timeline.clips.map((clip) =>
+                                clip.id === scene.clip.id
+                                  ? { ...clip, caption: event.target.value }
+                                  : clip,
+                              ),
+                            })
+                          }
+                        />
+                      </article>
+                    ))}
+                  </div>
+                  {enhancement ? (
+                    <button className="refresh-voiceover" type="button" onClick={applyScriptToCaptions}>
+                      <RefreshCcw size={16} />
+                      Refresh voiceover
+                    </button>
+                  ) : null}
+                </>
+              ) : null}
+
+              {editorTab === "voice" ? (
+                <div className="tab-empty">
+                  <Volume2 size={28} />
+                  <h2>AI voiceover</h2>
+                  <p>{enhancement?.voiceoverFile ? `Ready: ${enhancement.voiceoverFile}` : "Record or upload a screen flow to generate Azure or ElevenLabs narration."}</p>
+                  <button className="primary-button" type="button" onClick={applyScriptToCaptions}>Apply script</button>
                 </div>
-              ) : (
-                <p className="muted-note">Record or upload a video to generate an AI cleanup plan.</p>
-              )}
+              ) : null}
+
+              {editorTab === "music" ? (
+                <div className="tab-empty">
+                  <Music size={28} />
+                  <h2>Music</h2>
+                  <p>Add background music after the core video cleanup flow is locked.</p>
+                </div>
+              ) : null}
+
+              {editorTab === "visuals" ? (
+                <div className="tab-empty">
+                  <Captions size={28} />
+                  <h2>Captions and visuals</h2>
+                  <p>Use the script tab captions now. Branded callouts and overlays are next.</p>
+                </div>
+              ) : null}
+
+              {editorTab === "zooms" ? (
+                <div className="tab-empty">
+                  <Scissors size={28} />
+                  <h2>Zooms</h2>
+                  <p>Zoom keyframes are stored on each scene and will feed the FFmpeg render plan.</p>
+                </div>
+              ) : null}
+
+              {editorTab === "avatar" ? (
+                <div className="tab-empty">
+                  <UserRound size={28} />
+                  <h2>AI avatar</h2>
+                  <p>Avatar narration can sit on top of the cleaned screen recording in a later demo step.</p>
+                </div>
+              ) : null}
+
+              {editorTab === "elements" ? (
+                <div className="tab-empty">
+                  <Boxes size={28} />
+                  <h2>Elements</h2>
+                  <p>Add arrows, highlights, blur blocks, and branded badges as reusable video elements.</p>
+                </div>
+              ) : null}
             </div>
-          ) : null}
-          {editMode === "voiceover" ? (
-            <div>
-              <h2>Voiceover</h2>
-              <p>Azure or ElevenLabs TTS runs on the backend using your local keys. Generated voiceovers appear in the AI cleanup summary.</p>
-              {enhancement?.voiceoverFile ? (
-                <p className="muted-note">Voiceover ready: {enhancement.voiceoverFile}</p>
+          </aside>
+
+          <section className="editor-preview-panel">
+            <div className="preview-stage">
+              {previewUrl ? (
+                <video className="preview-video" src={previewUrl} controls />
               ) : (
-                <p className="muted-note">{enhancement?.warning ?? "No voiceover generated yet."}</p>
+                <div className="preview-placeholder">
+                  <Video size={42} />
+                  <h2>No recording loaded</h2>
+                  <p>Start recording or upload a video to preview the edited walkthrough.</p>
+                </div>
               )}
+              {previewUrl ? <span className="made-with">Made with Flow Studio</span> : null}
             </div>
-          ) : null}
-          {editMode === "export" ? (
-            <div className="export-edit-row">
-              <div>
-                <h2>Export</h2>
-                <p>Preview the backend render plan now. Full MP4 render execution is the next pipeline step.</p>
+
+            <div className="player-bar">
+              <button className="play-button" type="button" aria-label="Play preview" title="Play preview">
+                <Video size={18} />
+              </button>
+              <span className="player-time">0:00 / {formatTimelineTime(totalDuration || 10)}</span>
+              <Volume2 size={18} />
+              <div className="timeline-scrub" aria-hidden="true">
+                <span style={{ width: "55%" }} />
               </div>
-              <button className="primary-button" type="button" disabled={isRendering} onClick={previewRender}>
-                {isRendering ? <Loader2 className="spin" size={18} /> : <Download size={18} />}
-                Export preview
+              <button className="ghost-icon" type="button" aria-label="Fullscreen preview" title="Fullscreen preview">
+                <Eye size={17} />
               </button>
             </div>
-          ) : null}
-        </section>
 
-        <ClipList
-          clips={timeline.clips}
-          onChange={(clips) => setTimeline({ ...timeline, clips })}
-        />
-
-        {error ? <p className="error">{error}</p> : null}
-
-        {job ? (
-          <section className="panel export-summary">
-            <div className="panel-heading">
-              <div>
-                <h2>Export preview ready</h2>
-                <p>{job.commandPreview.length} FFmpeg steps prepared</p>
-              </div>
+            <div className="scene-strip">
+              {editorScenes.map((scene) => (
+                <button className="scene-chip" type="button" key={scene.clip.id} onClick={() => setEditorTab("script")}>
+                  {formatTimelineTime(scene.startsAt)}
+                </button>
+              ))}
+              <button className="add-scene-button" type="button">
+                <Plus size={15} />
+                Add Scenes
+              </button>
             </div>
-            <p className="summary-copy">
-              The backend accepted the timeline and prepared the render plan. The next implementation step is executing this job and returning a downloadable MP4.
-            </p>
+
+            {error ? <p className="error">{error}</p> : null}
+
+            {job ? (
+              <section className="export-ready">
+                <strong>Export preview ready</strong>
+                <span>{job.commandPreview.length} FFmpeg steps prepared for the current edit.</span>
+              </section>
+            ) : null}
           </section>
-        ) : null}
+        </div>
       </section>
     );
   }
@@ -869,29 +972,34 @@ export default function Home() {
         </nav>
       </aside>
 
-      <section className="main-area">
-        <header className="utility-bar">
-          <button className="ghost-icon" type="button" aria-label="Help" title="Help">
-            <HelpCircle size={18} />
-          </button>
-          <button className="ghost-icon" type="button" aria-label="Settings" title="Settings">
-            <Settings size={18} />
-          </button>
-          <button className="create-button" type="button" onClick={() => setActiveView("home")}>
-            <Plus size={17} />
-            Create new
-          </button>
-        </header>
+      <section className={`main-area ${activeView === "editor" ? "is-editor" : ""}`}>
+        {activeView !== "editor" ? (
+          <header className="utility-bar">
+            <button className="ghost-icon" type="button" aria-label="Help" title="Help">
+              <HelpCircle size={18} />
+            </button>
+            <button className="ghost-icon" type="button" aria-label="Settings" title="Settings">
+              <Settings size={18} />
+            </button>
+            <button className="create-button" type="button" onClick={() => setActiveView("home")}>
+              <Plus size={17} />
+              Create new
+            </button>
+          </header>
+        ) : null}
 
         {activeView === "home" ? renderHome() : null}
         {activeView === "ask-ai" ? renderAskAi() : null}
         {activeView === "library" ? renderLibrary() : null}
         {activeView === "skills" ? renderSkills() : null}
         {activeView === "recording" ? renderRecording() : null}
+        {activeView === "editor" ? renderEditor() : null}
 
-        <button className="floating-send" type="button" aria-label="Ask AI" onClick={() => setActiveView("ask-ai")}>
-          <Send size={19} />
-        </button>
+        {activeView !== "editor" ? (
+          <button className="floating-send" type="button" aria-label="Ask AI" onClick={() => setActiveView("ask-ai")}>
+            <Send size={19} />
+          </button>
+        ) : null}
       </section>
 
       {showRecordingModal ? (

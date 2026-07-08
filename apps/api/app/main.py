@@ -8,6 +8,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .models import EnhancedRecording, EnhanceRequest, Project, ProjectCreate, RenderJob, UploadedVideo
 from .render import build_render_commands, command_preview
@@ -16,8 +17,11 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 UPLOAD_DIR = ROOT_DIR / "storage" / "uploads"
 EXPORT_DIR = ROOT_DIR / "storage" / "exports"
 load_dotenv(ROOT_DIR / ".env")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Video Editor MVP API", version="0.1.0")
+app.mount("/media/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
